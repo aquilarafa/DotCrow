@@ -25,9 +25,15 @@ pub struct Anthropic {
 
 impl Anthropic {
     /// Cria o provedor com a API oficial e o modelo padrão, lendo a chave `anthropic` do cofre.
-    pub fn new(vault: Arc<Vault>) -> Self {
-        let client = reqwest::Client::builder().timeout(TIMEOUT).build().unwrap_or_default();
-        Self { vault, base_url: DEFAULT_BASE_URL.into(), model: DEFAULT_MODEL.into(), client }
+    ///
+    /// Falha só se o sistema não conseguir preparar a conexão segura (TLS).
+    pub fn new(vault: Arc<Vault>) -> Result<Self, ProviderError> {
+        let client = reqwest::Client::builder().timeout(TIMEOUT).build().map_err(|_| {
+            ProviderError::Unavailable(
+                "não consegui preparar a conexão segura com a Anthropic; confira os certificados do sistema".into(),
+            )
+        })?;
+        Ok(Self { vault, base_url: DEFAULT_BASE_URL.into(), model: DEFAULT_MODEL.into(), client })
     }
 
     /// Troca o modelo pedido à API.
@@ -91,10 +97,11 @@ impl LlmProvider for Anthropic {
             return Err(classify(status, retry_after, error.as_deref().unwrap_or(""), &self.model));
         }
 
-        let parsed: WireResponse = serde_json::from_slice(&body)
-            .map_err(|_| ProviderError::Unavailable("resposta ilegível da Anthropic".into()))?;
+        let parsed: WireResponse = serde_json::from_slice(&body).map_err(|_| {
+            ProviderError::Unavailable("resposta ilegível da Anthropic; tente de novo daqui a pouco".into())
+        })?;
         if parsed.stop_reason.as_deref() == Some("refusal") {
-            return Err(ProviderError::BadRequest("o modelo recusou o pedido".into()));
+            return Err(ProviderError::BadRequest("o modelo recusou o pedido; reformule e tente de novo".into()));
         }
         let text = parsed
             .content
@@ -111,14 +118,16 @@ impl LlmProvider for Anthropic {
 fn classify(status: u16, retry_after: Option<Duration>, message: &str, model: &str) -> ProviderError {
     match status {
         400 if message.to_lowercase().contains("credit balance is too low") => ProviderError::QuotaExhausted,
-        404 => ProviderError::Unavailable(format!("modelo {model} não encontrado ou indisponível para esta conta")),
+        404 => ProviderError::Unavailable(format!(
+            "modelo {model} não encontrado ou indisponível para esta conta; confira o nome do modelo no Console da Anthropic"
+        )),
         _ => ProviderError::from_http_status(status, retry_after, message),
     }
 }
 
 fn transport_error(error: reqwest::Error) -> ProviderError {
     let reason = if error.is_timeout() { "tempo esgotado" } else { "falha de rede" };
-    ProviderError::Unavailable(format!("{reason} ao falar com a Anthropic"))
+    ProviderError::Unavailable(format!("{reason} ao falar com a Anthropic; confira sua conexão com a internet"))
 }
 
 #[derive(Serialize)]

@@ -116,7 +116,7 @@ fn vault_with_key() -> Arc<Vault> {
 }
 
 fn provider(url: &str) -> Anthropic {
-    Anthropic::new(vault_with_key()).with_base_url(url)
+    Anthropic::new(vault_with_key()).unwrap().with_base_url(url)
 }
 
 fn request() -> CompletionRequest {
@@ -239,7 +239,7 @@ async fn rate_limit_reads_retry_after_seconds() {
 #[tokio::test]
 async fn missing_key_is_not_configured_and_makes_no_request() {
     let server = FakeServer::with_fixture(200, &[], "success.json").await;
-    let provider = Anthropic::new(Arc::new(Vault::in_memory())).with_base_url(&server.url);
+    let provider = Anthropic::new(Arc::new(Vault::in_memory())).unwrap().with_base_url(&server.url);
 
     let error = provider.complete(&request()).await.unwrap_err();
 
@@ -262,7 +262,7 @@ async fn connection_refused_is_unavailable() {
 
 #[test]
 fn debug_never_shows_the_key() {
-    let provider = Anthropic::new(vault_with_key()).with_model("claude-teste");
+    let provider = Anthropic::new(vault_with_key()).unwrap().with_model("claude-teste");
 
     let shown = format!("{provider:?}");
 
@@ -288,7 +288,7 @@ async fn real_api_answers() {
         max_tokens: 256,
     };
 
-    let response = Anthropic::new(Arc::new(vault)).complete(&request).await.unwrap();
+    let response = Anthropic::new(Arc::new(vault)).unwrap().complete(&request).await.unwrap();
 
     assert!(!response.text.trim().is_empty(), "{response:?}");
     assert!(response.model.starts_with("claude"), "{response:?}");
