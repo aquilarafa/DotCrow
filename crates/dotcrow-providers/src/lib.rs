@@ -12,6 +12,7 @@
 //! Os adaptadores reais (Anthropic, OpenAI, Gemini, OpenRouter, Ollama...) entram
 //! como módulos novos. Veja `docs/provedores.md` e as issues com o rótulo `provedor`.
 
+pub mod anthropic;
 pub mod mock;
 mod router;
 

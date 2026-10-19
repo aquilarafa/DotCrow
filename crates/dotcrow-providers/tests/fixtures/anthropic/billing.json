@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "billing_error",
+    "message": "There is an issue with your billing. Please check Plans & Billing."
+  },
+  "request_id": "req_011CSHoEeqs5C35K2UUqR7Fy"
+}

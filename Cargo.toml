@@ -28,6 +28,7 @@ clap = { version = "4.5", features = ["derive"] }
 rpassword = "7"
 directories = "6"
 anyhow = "1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 
 dotcrow-core = { path = "crates/dotcrow-core", version = "0.1.0" }
 dotcrow-crypto = { path = "crates/dotcrow-crypto", version = "0.1.0" }
