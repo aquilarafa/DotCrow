@@ -14,6 +14,8 @@ const DEFAULT_MODEL: &str = "claude-opus-5-5";
 const API_VERSION: &str = "2023-06-01";
 const BETA: &str = "server-side-fallback-2026-07-01";
 const TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_ERROR_CHARS: usize = 500;
 
 /// Provedor Claude, da Anthropic. A chave sai do cofre só na hora de cada pedido.
 pub struct Anthropic {
@@ -28,11 +30,12 @@ impl Anthropic {
     ///
     /// Falha só se o sistema não conseguir preparar a conexão segura (TLS).
     pub fn new(vault: Arc<Vault>) -> Result<Self, ProviderError> {
-        let client = reqwest::Client::builder().timeout(TIMEOUT).build().map_err(|_| {
-            ProviderError::Unavailable(
-                "não consegui preparar a conexão segura com a Anthropic; confira os certificados do sistema".into(),
-            )
-        })?;
+        let client =
+            reqwest::Client::builder().timeout(TIMEOUT).connect_timeout(CONNECT_TIMEOUT).build().map_err(|_| {
+                ProviderError::Unavailable(
+                    "não consegui preparar a conexão segura com a Anthropic; confira os certificados do sistema".into(),
+                )
+            })?;
         Ok(Self { vault, base_url: DEFAULT_BASE_URL.into(), model: DEFAULT_MODEL.into(), client })
     }
 
@@ -44,7 +47,7 @@ impl Anthropic {
 
     /// Troca o endereço base da API (por exemplo, um proxy ou um servidor de teste).
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
+        self.base_url = base_url.into().trim_end_matches('/').to_string();
         self
     }
 }
@@ -93,7 +96,9 @@ impl LlmProvider for Anthropic {
         let body = response.bytes().await.map_err(transport_error)?;
 
         if !(200..300).contains(&status) {
-            let error = serde_json::from_slice::<WireErrorBody>(&body).ok().map(|b| b.error.message);
+            let error = serde_json::from_slice::<WireErrorBody>(&body)
+                .ok()
+                .map(|b| b.error.message.chars().take(MAX_ERROR_CHARS).collect::<String>());
             return Err(classify(status, retry_after, error.as_deref().unwrap_or(""), &self.model));
         }
 
@@ -103,7 +108,7 @@ impl LlmProvider for Anthropic {
         if parsed.stop_reason.as_deref() == Some("refusal") {
             return Err(ProviderError::BadRequest("o modelo recusou o pedido; reformule e tente de novo".into()));
         }
-        let text = parsed
+        let text: String = parsed
             .content
             .into_iter()
             .filter_map(|block| match block {
@@ -111,6 +116,13 @@ impl LlmProvider for Anthropic {
                 WireBlock::Other => None,
             })
             .collect();
+        if text.trim().is_empty() {
+            return Err(if parsed.stop_reason.as_deref() == Some("max_tokens") {
+                ProviderError::BadRequest("o limite de tokens acabou antes da resposta; aumente max_tokens".into())
+            } else {
+                ProviderError::Unavailable("a Anthropic respondeu sem texto; tente de novo daqui a pouco".into())
+            });
+        }
         Ok(CompletionResponse { text, model: parsed.model })
     }
 }

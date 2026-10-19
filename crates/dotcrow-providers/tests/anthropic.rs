@@ -237,6 +237,40 @@ async fn rate_limit_reads_retry_after_seconds() {
 }
 
 #[tokio::test]
+async fn answer_without_text_is_an_error_not_an_empty_success() {
+    let thinking_only = FakeServer::with_fixture(200, &[], "thinking_only.json").await;
+    let error = provider(&thinking_only.url).complete(&request()).await.unwrap_err();
+    assert_eq!(discriminant(&error), discriminant(&ProviderError::BadRequest(String::new())), "{error:?}");
+
+    let empty =
+        FakeServer::start(200, &[], r#"{"model":"claude-opus-5-5","content":[],"stop_reason":"end_turn"}"#).await;
+    let error = provider(&empty.url).complete(&request()).await.unwrap_err();
+    assert_eq!(discriminant(&error), discriminant(&ProviderError::Unavailable(String::new())), "{error:?}");
+}
+
+#[tokio::test]
+async fn upstream_error_text_is_capped_at_500_characters() {
+    let long = "x".repeat(5000);
+    let body = format!(r#"{{"type":"error","error":{{"type":"invalid_request_error","message":"{long}"}}}}"#);
+    let server = FakeServer::start(400, &[], &body).await;
+
+    let error = provider(&server.url).complete(&request()).await.unwrap_err();
+
+    assert_eq!(discriminant(&error), discriminant(&ProviderError::BadRequest(String::new())), "{error:?}");
+    assert_eq!(error.to_string().matches('x').count(), 500, "{error}");
+}
+
+#[tokio::test]
+async fn base_url_with_trailing_slash_hits_v1_messages() {
+    let server = FakeServer::with_fixture(200, &[], "success.json").await;
+
+    provider(&format!("{}/", server.url)).complete(&request()).await.unwrap();
+
+    let line = server.requests.lock().unwrap()[0].request_line().to_string();
+    assert!(line.starts_with("POST /v1/messages "), "{line}");
+}
+
+#[tokio::test]
 async fn missing_key_is_not_configured_and_makes_no_request() {
     let server = FakeServer::with_fixture(200, &[], "success.json").await;
     let provider = Anthropic::new(Arc::new(Vault::in_memory())).unwrap().with_base_url(&server.url);
