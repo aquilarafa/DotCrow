@@ -78,7 +78,11 @@ Não guarde a chave em campos da struct, não coloque em mensagens de erro e nã
 
 `ProviderError::from_http_status` cobre o comum (401/403, 402, 429, 5xx). Refine o que for específico do provedor. Exemplos que fazem diferença:
 
-- alguns provedores avisam "sem créditos" com status 400 e uma mensagem no corpo: isso é `QuotaExhausted`, não `BadRequest`;
+- alguns provedores avisam "sem créditos" ou "limite de gasto atingido" com status 400 e uma mensagem no corpo: isso é `QuotaExhausted`, não `BadRequest`;
+- um 400 causado pelo próprio adaptador (por exemplo, um cabeçalho beta que o provedor recusou) não é culpa do pedido: use `Unavailable`, para o roteador trocar;
+- não siga redirecionamentos: o cabeçalho com a chave iria junto para o outro endereço. Trate 3xx como `Unavailable`;
+- limite o `retry-after` a uma faixa razoável, porque o valor vem da rede;
+- antes de pôr o texto de erro do provedor no `ProviderError`, troque a chave por `[chave]`, caso o servidor a devolva no corpo;
 - leia o cabeçalho `retry-after` quando existir e passe em `RateLimited { retry_after }`;
 - erro de conexão e timeout são `Unavailable`.
 

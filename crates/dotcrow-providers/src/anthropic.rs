@@ -16,6 +16,7 @@ const BETA: &str = "server-side-fallback-2026-07-01";
 const TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ERROR_CHARS: usize = 500;
+const MAX_RETRY_AFTER_SECS: u64 = 60 * 60;
 
 /// Provedor Claude, da Anthropic. A chave sai do cofre só na hora de cada pedido.
 pub struct Anthropic {
@@ -30,8 +31,12 @@ impl Anthropic {
     ///
     /// Falha só se o sistema não conseguir preparar a conexão segura (TLS).
     pub fn new(vault: Arc<Vault>) -> Result<Self, ProviderError> {
-        let client =
-            reqwest::Client::builder().timeout(TIMEOUT).connect_timeout(CONNECT_TIMEOUT).build().map_err(|_| {
+        let client = reqwest::Client::builder()
+            .timeout(TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| {
                 ProviderError::Unavailable(
                     "não consegui preparar a conexão segura com a Anthropic; confira os certificados do sistema".into(),
                 )
@@ -49,6 +54,13 @@ impl Anthropic {
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into().trim_end_matches('/').to_string();
         self
+    }
+
+    fn scrub(&self, text: &str) -> String {
+        match self.vault.lease(PROVIDER_ID) {
+            Some(lease) => lease.with_secret(|key| text.replace(key, "[chave]")),
+            None => text.to_string(),
+        }
     }
 }
 
@@ -91,15 +103,14 @@ impl LlmProvider for Anthropic {
             .headers()
             .get(RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse().ok())
-            .map(Duration::from_secs);
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|secs| Duration::from_secs(secs.clamp(1, MAX_RETRY_AFTER_SECS)));
         let body = response.bytes().await.map_err(transport_error)?;
 
         if !(200..300).contains(&status) {
-            let error = serde_json::from_slice::<WireErrorBody>(&body)
-                .ok()
-                .map(|b| b.error.message.chars().take(MAX_ERROR_CHARS).collect::<String>());
-            return Err(classify(status, retry_after, error.as_deref().unwrap_or(""), &self.model));
+            let message = serde_json::from_slice::<WireErrorBody>(&body).map(|b| b.error.message).unwrap_or_default();
+            let message: String = self.scrub(&message).chars().take(MAX_ERROR_CHARS).collect();
+            return Err(classify(status, retry_after, &message, &self.model));
         }
 
         let parsed: WireResponse = serde_json::from_slice(&body).map_err(|_| {
@@ -128,8 +139,19 @@ impl LlmProvider for Anthropic {
 }
 
 fn classify(status: u16, retry_after: Option<Duration>, message: &str, model: &str) -> ProviderError {
+    let lower = message.to_lowercase();
     match status {
-        400 if message.to_lowercase().contains("credit balance is too low") => ProviderError::QuotaExhausted,
+        300..=399 => ProviderError::Unavailable(format!(
+            "a Anthropic respondeu com redirecionamento (HTTP {status}); confira o endereço base"
+        )),
+        400 if lower.contains("credit balance is too low")
+            || lower.contains("reached your specified api usage limits") =>
+        {
+            ProviderError::QuotaExhausted
+        }
+        400 if lower.contains("anthropic-beta") || lower.contains("fallbacks") => ProviderError::Unavailable(
+            "a Anthropic recusou um recurso beta que o dotcrow usa; atualize o dotcrow ou use outro provedor".into(),
+        ),
         404 => ProviderError::Unavailable(format!(
             "modelo {model} não encontrado ou indisponível para esta conta; confira o nome do modelo no Console da Anthropic"
         )),

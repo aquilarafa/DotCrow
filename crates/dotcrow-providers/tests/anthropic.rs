@@ -188,6 +188,8 @@ async fn error_responses_are_classified_for_the_router() {
     let cases: &[(u16, &str, ProviderError)] = &[
         (400, "invalid_request.json", bad_request.clone()),
         (400, "credit_balance.json", ProviderError::QuotaExhausted),
+        (400, "usage_limit.json", ProviderError::QuotaExhausted),
+        (400, "beta_header.json", unavailable.clone()),
         (402, "billing.json", ProviderError::QuotaExhausted),
         (401, "authentication.json", ProviderError::Unauthorized),
         (403, "permission.json", ProviderError::Unauthorized),
@@ -233,6 +235,48 @@ async fn rate_limit_reads_retry_after_seconds() {
     let error = provider(&server.url).complete(&request()).await.unwrap_err();
 
     assert_eq!(error, ProviderError::RateLimited { retry_after: Some(Duration::from_secs(7)) });
+    assert_no_key(&error);
+}
+
+#[tokio::test]
+async fn huge_retry_after_is_capped_at_one_hour() {
+    let server = FakeServer::with_fixture(429, &[("retry-after", "18446744073709551615")], "rate_limit.json").await;
+
+    let error = provider(&server.url).complete(&request()).await.unwrap_err();
+
+    assert_eq!(error, ProviderError::RateLimited { retry_after: Some(Duration::from_secs(60 * 60)) });
+}
+
+#[tokio::test]
+async fn zero_retry_after_still_cools_down() {
+    let server = FakeServer::with_fixture(429, &[("retry-after", "0")], "rate_limit.json").await;
+
+    let error = provider(&server.url).complete(&request()).await.unwrap_err();
+
+    assert_eq!(error, ProviderError::RateLimited { retry_after: Some(Duration::from_secs(1)) });
+}
+
+#[tokio::test]
+async fn redirect_is_not_followed_so_the_key_stays_put() {
+    let other = FakeServer::with_fixture(200, &[], "success.json").await;
+    let location = format!("{}/v1/messages", other.url);
+    let server = FakeServer::start(307, &[("location", &location)], "{}").await;
+
+    let error = provider(&server.url).complete(&request()).await.unwrap_err();
+
+    assert!(matches!(error, ProviderError::Unavailable(_)), "{error:?}");
+    assert_eq!(other.connections.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn upstream_error_echoing_the_key_is_scrubbed() {
+    let body = format!(
+        r#"{{"type":"error","error":{{"type":"invalid_request_error","message":"bad header x-api-key: {KEY}"}}}}"#
+    );
+    let server = FakeServer::start(400, &[], &body).await;
+
+    let error = provider(&server.url).complete(&request()).await.unwrap_err();
+
     assert_no_key(&error);
 }
 
