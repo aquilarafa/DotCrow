@@ -88,6 +88,12 @@ Uma classificação errada faz o roteador trocar quando não devia, ou insistir 
 
 No CI não há chaves. Teste a conversão de mensagens e a classificação de erros com respostas gravadas (JSON de exemplo em `tests/fixtures/`). Se quiser um teste contra a API real, marque com `#[ignore]` e documente como rodar localmente.
 
+O adaptador da Anthropic tem um teste assim. Para rodar com a sua chave:
+
+```bash
+DOTCROW_ANTHROPIC_KEY=sk-ant-... cargo test -p dotcrow-providers --test anthropic -- --ignored
+```
+
 ### 5. Documente
 
 Acrescente o provedor na tabela abaixo e no CHANGELOG.
@@ -96,7 +102,7 @@ Acrescente o provedor na tabela abaixo e no CHANGELOG.
 
 | Provedor | id | Estado |
 |---|---|---|
-| Anthropic (Claude) | `anthropic` | procurando quem faça |
+| Anthropic (Claude) | `anthropic` | ✅ `anthropic.rs` |
 | OpenAI (GPT) | `openai` | procurando quem faça |
 | Google (Gemini) | `gemini` | procurando quem faça |
 | OpenRouter | `openrouter` | procurando quem faça |
